@@ -88,7 +88,7 @@ This program is licensed under the **Creative Commons Attribution-NonCommercial-
 
 **영상 변환 및 분할 도구 (Video Converter & Splitter)**
 
-**영상 변환(Converter)**과 **영상 분할(Splitter)** 기능을 하나로 통합한 올인원 유틸리티입니다. 단일/일괄 처리, 하드웨어 가속 설정을 지원하며 한국어/영어 인터페이스를 제공합니다.
+**영상 변환(Converter)** 과 **영상 분할(Splitter)** 기능을 하나로 통합한 올인원 유틸리티입니다. 단일/일괄 처리, 하드웨어 가속 설정을 지원하며 한국어/영어 인터페이스를 제공합니다.
 
 이전 버전과 달리 `moviepy` 의존성을 제거하고, **FFmpeg**를 `subprocess`로 직접 제어하여 성능과 안정성을 극대화했습니다.
 
