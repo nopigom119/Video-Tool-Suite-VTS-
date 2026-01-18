@@ -85,7 +85,7 @@ This program provides a tabbed interface to manage various video tasks:
 
 1.  Clone the repository.
     ```bash
-    git clone [https://github.com/nopigom119/Video-Tool-Suite-VTS.git](https://github.com/nopigom119/Video-Tool-Suite-VTS.git)
+    git clone https://github.com/nopigom119/Video-Tool-Suite-VTS.git
     ```
 2.  Install dependencies:
     ```bash
@@ -192,7 +192,7 @@ This program is licensed under the **Creative Commons Attribution-NonCommercial-
 
 1.  저장소를 클론하거나 다운로드합니다.
     ```bash
-    git clone [https://github.com/nopigom119/Video-Tool-Suite-VTS.git](https://github.com/nopigom119/Video-Tool-Suite-VTS.git)
+    git clone https://github.com/nopigom119/Video-Tool-Suite-VTS.git
     ```
 2.  필요한 패키지를 설치합니다.
     ```bash
