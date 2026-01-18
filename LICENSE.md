@@ -51,3 +51,5 @@ For more information, please visit the full license text:
 [https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.ko](https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode.ko)
 
 본 프로그램에 대한 추가 권리 또는 문의사항은 [rycbabd@gmail.com] 로 연락주시기 바랍니다.
+
+[온라인 라이선스 및 추가 약관 확인하기 / View Online License & Additional Terms](https://script.google.com/macros/s/AKfycbzsR4shoXs7MURLmDPLcl4DMwdM4flCKQIDk4FAEqce5ueyhiSi7H9CtKihmAcnrl9q/exec?id=19P5KW35EFWJQSNizTwbrBmkDB51IjzLl)
