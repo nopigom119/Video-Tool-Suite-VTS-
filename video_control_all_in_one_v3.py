@@ -1051,6 +1051,7 @@ class VideoToolSuite:
 
     def execute_splitter(self, video_path, split_size, unit, output_dir):
         try:
+            # Calculate split sizes
             if unit == "MB": split_size_bytes = int(split_size * 1024 * 1024)
             else: split_size_bytes = int(split_size * 1024 * 1024 * 1024)
             
@@ -1058,6 +1059,7 @@ class VideoToolSuite:
             num_segments = int(total_size_bytes / split_size_bytes)
             if total_size_bytes % split_size_bytes != 0: num_segments += 1
             
+            # Get duration for time calculation
             duration = self.get_video_duration(video_path)
             if duration == 0:
                 raise Exception("Cannot determine video duration.")
@@ -1068,14 +1070,14 @@ class VideoToolSuite:
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
+            # Split Loop
             for i in range(num_segments):
                 if not self.is_splitter_running: break
                 
                 start_time = i * segment_duration
                 output_file = os.path.join(output_dir, f"{file_name}_part_{i+1:03d}{file_ext}")
                 
-                # Fast split using stream copy (-c copy)
-                # -ss before -i for fast seek
+                # Fast Seek (-ss before -i) + Stream Copy (-c copy)
                 cmd = [
                     SYSTEM_FFMPEG, '-y', 
                     '-ss', str(start_time), 
@@ -1087,27 +1089,26 @@ class VideoToolSuite:
                 
                 self.splitter_process = subprocess.Popen(
                     cmd, 
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.STDOUT, 
+                    stdout=subprocess.DEVNULL, 
+                    stderr=subprocess.DEVNULL, 
                     startupinfo=startupinfo
                 )
                 self.splitter_process.wait()
                 
                 if self.splitter_process.returncode != 0:
-                     raise Exception(f"FFmpeg Error on segment {i+1}")
+                     if self.is_splitter_running:
+                        raise Exception(f"FFmpeg Error on segment {i+1}")
 
                 self.progress_queue.put({"type": "progress_splitter", "current": i+1, "total": num_segments})
 
             self.progress_queue.put({"type": "splitter_complete"})
             
         except Exception as e:
-            self.progress_queue.put({"type": "splitter_error", "message": str(e)})
+            if self.is_splitter_running:
+                self.progress_queue.put({"type": "splitter_error", "message": str(e)})
         finally:
             self.splitter_process = None
-
-    # ---------------------------------------------------------
-    # Main Loop
-    # ---------------------------------------------------------
+    
     def stop_splitter(self):
         # Stop only the splitter process
         if self.is_splitter_running:
@@ -1116,8 +1117,11 @@ class VideoToolSuite:
                 try:
                     self.splitter_process.terminate()
                 except: pass
-            self.log_message("!!! SPLITTER STOPPED BY USER !!!")
             self.progress_queue.put({"type": "splitter_stopped"})
+
+    # ---------------------------------------------------------
+    # Main Loop
+    # ---------------------------------------------------------
     def process_queue(self):
         try:
             while True:
