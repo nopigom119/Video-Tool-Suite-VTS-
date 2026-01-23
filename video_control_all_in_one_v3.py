@@ -286,8 +286,14 @@ class VideoToolSuite:
         self.setup_dark_theme()
 
         self.progress_queue = queue.Queue()
-        self.is_running = False
-        self.current_process = None 
+        
+        # --- State Management ---
+        # Separate flags to allow concurrent execution
+        self.is_running = False          # For Converter
+        self.is_splitter_running = False # For Splitter
+        
+        self.current_process = None      # Converter Process
+        self.splitter_process = None     # Splitter Process
         
         self.tasks_queue_data = [] 
         self.task_widgets = []     
@@ -458,13 +464,11 @@ class VideoToolSuite:
         self.bf_labelframe_log_widget = lf_log
         self.bf_log_text = scrolledtext.ScrolledText(lf_log, bg="#222222", fg="#DDDDDD", font=("Consolas", 9), state='disabled', height=10)
         self.bf_log_text.pack(fill=tk.BOTH, expand=True)
-
     def create_splitter_ui(self, parent):
         lf_in = ttk.LabelFrame(parent, text="Input Video", padding="15")
         lf_in.pack(fill=tk.X, pady=(0, 15))
         self.sp_labelframe_input_widget = lf_in
         
-        # Register DND
         self.register_dnd(lf_in, self.handle_dnd_splitter_file)
 
         f1 = ttk.Frame(lf_in); f1.pack(fill=tk.X)
@@ -483,14 +487,15 @@ class VideoToolSuite:
 
         self.sp_start_button_widget = ttk.Button(parent, command=self.sp_start_splitting_thread, state="disabled")
         self.sp_start_button_widget.pack(pady=10, fill=tk.X, ipady=5)
-        self.sp_button_stop = ttk.Button(parent, text="STOP", command=self.stop_processing, style="Red.TButton", state="disabled")
+        
+        # Use specific stop command for splitter
+        self.sp_button_stop = ttk.Button(parent, text="STOP", command=self.stop_splitter, style="Red.TButton", state="disabled")
         self.sp_button_stop.pack(pady=5, fill=tk.X)
 
         self.sp_progress_label_widget = ttk.Label(parent, text="", font=("Segoe UI", 10))
         self.sp_progress_label_widget.pack(anchor='w', pady=(0, 2))
         self.sp_progress_bar = ttk.Progressbar(parent, orient=tk.HORIZONTAL, mode='determinate')
         self.sp_progress_bar.pack(fill=tk.X, ipady=5)
-
     def create_settings_ui(self, parent):
         lf_ff = ttk.LabelFrame(parent, text="FFmpeg", padding="15"); lf_ff.pack(fill=tk.X, pady=(0, 15))
         self.settings_labelframe_ffmpeg_widget = lf_ff
@@ -1016,52 +1021,103 @@ class VideoToolSuite:
             self.sp_start_button_widget.config(state="normal")
 
     def sp_start_splitting_thread(self):
-        if self.is_running: return
+        # Check independent splitter state
+        if self.is_splitter_running: return
+        
         video_path = self.sp_input_filepath.get()
         size_val = self.sp_split_size.get()
         unit = self.sp_split_unit.get()
+        
         if not video_path or not os.path.exists(video_path): return
+        
         try:
             split_size_float = float(size_val)
+            if split_size_float <= 0: raise ValueError
+            
             output_dir = filedialog.askdirectory()
             if not output_dir: return
 
-            self.is_running = True
-            self.set_ui_state(processing=True, mode="splitter")
+            self.is_splitter_running = True
+            
+            # Update UI for splitter only
+            self.sp_start_button_widget.config(state="disabled")
+            self.sp_button_stop.config(state="normal")
+            
             self.sp_progress_bar['value'] = 0
             
             threading.Thread(target=self.execute_splitter, args=(video_path, split_size_float, unit, output_dir), daemon=True).start()
-        except: pass
+        except Exception as e:
+            messagebox.showerror("Error", f"Invalid input: {e}")
 
     def execute_splitter(self, video_path, split_size, unit, output_dir):
         try:
             if unit == "MB": split_size_bytes = int(split_size * 1024 * 1024)
             else: split_size_bytes = int(split_size * 1024 * 1024 * 1024)
+            
             total_size_bytes = os.path.getsize(video_path)
             num_segments = int(total_size_bytes / split_size_bytes)
             if total_size_bytes % split_size_bytes != 0: num_segments += 1
+            
             duration = self.get_video_duration(video_path)
+            if duration == 0:
+                raise Exception("Cannot determine video duration.")
+                
             segment_duration = duration / num_segments
             file_name, file_ext = os.path.splitext(os.path.basename(video_path))
+            
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
             for i in range(num_segments):
-                if not self.is_running: break
+                if not self.is_splitter_running: break
+                
                 start_time = i * segment_duration
                 output_file = os.path.join(output_dir, f"{file_name}_part_{i+1:03d}{file_ext}")
-                cmd = [SYSTEM_FFMPEG, '-y', '-ss', str(start_time), '-i', video_path, '-t', str(segment_duration), '-c', 'copy', output_file]
-                self.current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, startupinfo=startupinfo)
-                self.current_process.wait()
+                
+                # Fast split using stream copy (-c copy)
+                # -ss before -i for fast seek
+                cmd = [
+                    SYSTEM_FFMPEG, '-y', 
+                    '-ss', str(start_time), 
+                    '-i', video_path, 
+                    '-t', str(segment_duration), 
+                    '-c', 'copy', 
+                    output_file
+                ]
+                
+                self.splitter_process = subprocess.Popen(
+                    cmd, 
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.STDOUT, 
+                    startupinfo=startupinfo
+                )
+                self.splitter_process.wait()
+                
+                if self.splitter_process.returncode != 0:
+                     raise Exception(f"FFmpeg Error on segment {i+1}")
+
                 self.progress_queue.put({"type": "progress_splitter", "current": i+1, "total": num_segments})
 
             self.progress_queue.put({"type": "splitter_complete"})
+            
         except Exception as e:
             self.progress_queue.put({"type": "splitter_error", "message": str(e)})
+        finally:
+            self.splitter_process = None
 
     # ---------------------------------------------------------
     # Main Loop
     # ---------------------------------------------------------
+    def stop_splitter(self):
+        # Stop only the splitter process
+        if self.is_splitter_running:
+            self.is_splitter_running = False
+            if self.splitter_process:
+                try:
+                    self.splitter_process.terminate()
+                except: pass
+            self.log_message("!!! SPLITTER STOPPED BY USER !!!")
+            self.progress_queue.put({"type": "splitter_stopped"})
     def process_queue(self):
         try:
             while True:
@@ -1093,20 +1149,34 @@ class VideoToolSuite:
                     messagebox.showinfo(get_string('dialog_title_info'), get_string('status_complete'))
 
                 elif mtype == "stopped":
+                    # Stop converter UI only
                     self.set_ui_state(processing=False, mode="single")
                     self.set_ui_state(processing=False, mode="batch")
-                    self.set_ui_state(processing=False, mode="splitter")
                     messagebox.showinfo(get_string('dialog_title_info'), get_string('status_stopped'))
-
+                
+                # --- Splitter Events (Independent) ---
                 elif mtype == "progress_splitter":
                     self.sp_progress_bar['value'] = (msg['current'] / msg['total']) * 100
                     self.sp_progress_label_widget.config(text=f"{msg['current']}/{msg['total']}")
 
                 elif mtype == "splitter_complete":
-                    self.is_running = False
-                    self.set_ui_state(processing=False, mode="splitter")
+                    self.is_splitter_running = False
+                    self.sp_start_button_widget.config(state="normal")
+                    self.sp_button_stop.config(state="disabled")
                     self.sp_progress_bar['value'] = 100
                     messagebox.showinfo(get_string('dialog_title_info'), get_string('status_complete'))
+                    
+                elif mtype == "splitter_stopped":
+                    self.is_splitter_running = False
+                    self.sp_start_button_widget.config(state="normal")
+                    self.sp_button_stop.config(state="disabled")
+                    messagebox.showinfo(get_string('dialog_title_info'), get_string('status_stopped'))
+
+                elif mtype == "splitter_error":
+                    self.is_splitter_running = False
+                    self.sp_start_button_widget.config(state="normal")
+                    self.sp_button_stop.config(state="disabled")
+                    messagebox.showerror(get_string('dialog_title_error'), msg.get("message"))
 
         except queue.Empty: pass
         finally: self.root.after(100, self.process_queue)
