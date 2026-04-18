@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
+from tkinter import filedialog, messagebox
 from tkinterdnd2 import DND_FILES, TkinterDnD
 import customtkinter as ctk
 import os
@@ -21,41 +21,36 @@ import ffmpeg_engine as engine
 class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
     def __init__(self):
         super().__init__()
-        
-        # Initialize DnD context for CustomTkinter
         self.TkdndVersion = TkinterDnD._require(self)
-        
-        # Appearance and Theme settings
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
         self.geometry("1200x980")
-        
-        # Core State and Isolated Process Handlers
-        self.progress_queue = queue.Queue()
-        self.is_running = False          
-        self.is_splitter_running = False 
-        self.current_process = None      # Standard/Single conversion handler
-        self.splitter_process = None     # Splitter tool handler
-        self.tasks_queue_data = [] 
-        self.task_widgets = []     
-        self.current_task_index = -1 
-        self.temp_dirs = [] 
-        
-        # ETA Calculator initialization (Synchronized with utils.py)
-        self.eta_calculator = TimeEstimator(history_len=10)
 
-        # Load Persistent Configuration
+        self.progress_queue = queue.Queue()
+        self.is_running = False
+        self.is_splitter_running = False
+        self.current_process = None
+        self.splitter_process = None
+
+        self.tasks_queue_data = []
+        self.task_widgets = []
+        self.batch_queue_data = []
+        self.batch_widgets = []
+
+        self.current_task_index = -1
+        self.temp_dirs = []
+
+        self.eta_calculator = TimeEstimator(history_len=10)
         self.app_cfg = config.load_config()
         engine.configure_ffmpeg_path(self.app_cfg.get("ffmpeg_path"), self.app_cfg.get("ffprobe_path"))
 
-        # GUI Sync Variables
         self.total_cpu_cores = os.cpu_count() or 1
         self.cpu_threads_to_use = tk.IntVar(value=self.app_cfg.get("threads", 4))
         self.ffmpeg_path_var = tk.StringVar(value=engine.SYSTEM_FFMPEG or "")
         self.ffprobe_path_var = tk.StringVar(value=engine.SYSTEM_FFPROBE or "")
         self.selected_video_codec = tk.StringVar(value=self.app_cfg.get("codec", "H.264"))
         self.gpu_quality_target_crf = tk.IntVar(value=self.app_cfg.get("qp", 23))
-        
+
         self.nv_preset = tk.StringVar(value=self.app_cfg.get("nv_preset", "p4"))
         self.intel_preset = tk.StringVar(value=self.app_cfg.get("intel_preset", "fast"))
         self.amd_usage = tk.StringVar(value=self.app_cfg.get("amd_usage", "transcoding"))
@@ -78,12 +73,10 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
         self.create_main_layout()
         self.update_ui_language()
 
-        # Lifecycle protocols
         self.protocol("WM_DELETE_WINDOW", self.on_app_closing)
         self.after(100, self.process_queue)
 
     def save_app_settings(self):
-        """Persist current UI state to config module"""
         settings = {
             "ffmpeg_path": self.ffmpeg_path_var.get(),
             "ffprobe_path": self.ffprobe_path_var.get(),
@@ -110,7 +103,7 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
         self.t_conv = self.main_tabs.add(self.current_main_tab_names[0])
         self.t_split = self.main_tabs.add(self.current_main_tab_names[1])
         self.t_set = self.main_tabs.add(self.current_main_tab_names[2])
-        
+
         self.create_converter_ui(self.t_conv)
         self.create_splitter_ui(self.t_split)
         self.create_settings_ui(self.t_set)
@@ -127,37 +120,60 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
         self.ts_sf = self.conv_tabs.add(self.current_conv_tab_names[0])
         self.ts_bf = self.conv_tabs.add(self.current_conv_tab_names[1])
 
-        # Single UI
-        lf_add = ctk.CTkFrame(self.ts_sf); lf_add.pack(fill=tk.X, padx=10, pady=10)
+        lf_add = ctk.CTkFrame(self.ts_sf)
+        lf_add.pack(fill=tk.X, padx=10, pady=10)
         self.register_dnd(lf_add, self.handle_dnd_single_file)
-        f1 = ctk.CTkFrame(lf_add, fg_color="transparent"); f1.pack(fill=tk.X, padx=10, pady=5)
-        self.sf_ent_path = ctk.CTkEntry(f1, textvariable=self.sf_input_filepath); self.sf_ent_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.sf_btn_sel = ctk.CTkButton(f1, width=100, text="", command=self.sf_select_file); self.sf_btn_sel.pack(side=tk.RIGHT, padx=5)
-        f2 = ctk.CTkFrame(lf_add, fg_color="transparent"); f2.pack(fill=tk.X, padx=10, pady=5)
-        self.sf_lbl_fmt = ctk.CTkLabel(f2, text=""); self.sf_lbl_fmt.pack(side=tk.LEFT, padx=5)
+
+        f1 = ctk.CTkFrame(lf_add, fg_color="transparent")
+        f1.pack(fill=tk.X, padx=10, pady=5)
+        self.sf_ent_path = ctk.CTkEntry(f1, textvariable=self.sf_input_filepath)
+        self.sf_ent_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.sf_btn_sel = ctk.CTkButton(f1, width=100, text="", command=self.sf_select_file)
+        self.sf_btn_sel.pack(side=tk.RIGHT, padx=5)
+
+        f2 = ctk.CTkFrame(lf_add, fg_color="transparent")
+        f2.pack(fill=tk.X, padx=10, pady=5)
+        self.sf_lbl_fmt = ctk.CTkLabel(f2, text="")
+        self.sf_lbl_fmt.pack(side=tk.LEFT, padx=5)
         ctk.CTkComboBox(f2, variable=self.sf_target_format, values=list(config.TARGET_FORMATS.keys())).pack(side=tk.LEFT, padx=5)
-        self.sf_btn_add = ctk.CTkButton(f2, width=120, text="", command=self.sf_add_to_queue); self.sf_btn_add.pack(side=tk.RIGHT, padx=5)
+        self.sf_btn_add = ctk.CTkButton(f2, width=120, text="", command=self.sf_add_to_queue)
+        self.sf_btn_add.pack(side=tk.RIGHT, padx=5)
 
         self.sf_queue_frame = ScrollableTaskFrame(self.ts_sf, height=400)
         self.sf_queue_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        f3 = ctk.CTkFrame(self.ts_sf, fg_color="transparent"); f3.pack(fill=tk.X, padx=10, pady=10)
-        self.sf_btn_stop = ctk.CTkButton(f3, text="STOP", fg_color="#AA0000", hover_color="#CC0000", command=self.stop_processing, state="disabled"); self.sf_btn_stop.pack(side=tk.LEFT, padx=5)
-        self.sf_btn_rem = ctk.CTkButton(f3, text="", command=self.sf_remove_selected); self.sf_btn_rem.pack(side=tk.LEFT, padx=5)
-        self.sf_btn_clr = ctk.CTkButton(f3, text="", command=self.sf_clear_all); self.sf_btn_clr.pack(side=tk.LEFT, padx=5)
-        self.sf_btn_start = ctk.CTkButton(f3, text="", command=self.sf_start_queue_processing); self.sf_btn_start.pack(side=tk.RIGHT, padx=5)
+        f3 = ctk.CTkFrame(self.ts_sf, fg_color="transparent")
+        f3.pack(fill=tk.X, padx=10, pady=10)
+        self.sf_btn_stop = ctk.CTkButton(f3, text="STOP", fg_color="#AA0000", hover_color="#CC0000", command=self.stop_processing, state="disabled")
+        self.sf_btn_stop.pack(side=tk.LEFT, padx=5)
+        self.sf_btn_rem = ctk.CTkButton(f3, text="", command=self.sf_remove_selected)
+        self.sf_btn_rem.pack(side=tk.LEFT, padx=5)
+        self.sf_btn_clr = ctk.CTkButton(f3, text="", command=self.sf_clear_all)
+        self.sf_btn_clr.pack(side=tk.LEFT, padx=5)
+        self.sf_btn_start = ctk.CTkButton(f3, text="", command=self.sf_start_queue_processing)
+        self.sf_btn_start.pack(side=tk.RIGHT, padx=5)
 
-        # Batch UI
-        lf_bin = ctk.CTkFrame(self.ts_bf); lf_bin.pack(fill=tk.X, padx=10, pady=10)
+        lf_bin = ctk.CTkFrame(self.ts_bf)
+        lf_bin.pack(fill=tk.X, padx=10, pady=10)
         self.register_dnd(lf_bin, self.handle_dnd_batch_folder)
-        self.bf_ent_path = ctk.CTkEntry(lf_bin, textvariable=self.bf_input_folder_path); self.bf_ent_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=10)
-        self.bf_btn_sel = ctk.CTkButton(lf_bin, width=100, text="", command=self.bf_select_input_folder); self.bf_btn_sel.pack(side=tk.RIGHT, padx=10)
-        lf_bset = ctk.CTkFrame(self.ts_bf); lf_bset.pack(fill=tk.X, padx=10, pady=5)
-        self.bf_chk_arch = ctk.CTkCheckBox(lf_bset, text="", variable=self.bf_auto_archive); self.bf_chk_arch.pack(side=tk.LEFT, padx=10)
-        self.bf_btn_conv = ctk.CTkButton(lf_bset, text="", command=lambda: self.bf_start_batch_thread('re-encode')); self.bf_btn_conv.pack(side=tk.RIGHT, padx=5)
-        self.bf_btn_fast = ctk.CTkButton(lf_bset, text="", command=lambda: self.bf_start_batch_thread('remux')); self.bf_btn_fast.pack(side=tk.RIGHT, padx=5)
-        self.bf_log_text = scrolledtext.ScrolledText(self.ts_bf, bg="#1E1E1E", fg="#FFFFFF", font=("Consolas", 10), state='disabled')
-        self.bf_log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.bf_ent_path = ctk.CTkEntry(lf_bin, textvariable=self.bf_input_folder_path)
+        self.bf_ent_path.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, pady=10)
+        self.bf_btn_sel = ctk.CTkButton(lf_bin, width=100, text="", command=self.bf_select_input_folder)
+        self.bf_btn_sel.pack(side=tk.RIGHT, padx=10)
+
+        lf_bset = ctk.CTkFrame(self.ts_bf)
+        lf_bset.pack(fill=tk.X, padx=10, pady=5)
+        self.bf_btn_stop = ctk.CTkButton(lf_bset, text="STOP", fg_color="#AA0000", hover_color="#CC0000", command=self.stop_processing, state="disabled")
+        self.bf_btn_stop.pack(side=tk.LEFT, padx=5)
+        self.bf_chk_arch = ctk.CTkCheckBox(lf_bset, text="", variable=self.bf_auto_archive)
+        self.bf_chk_arch.pack(side=tk.LEFT, padx=10)
+        self.bf_btn_conv = ctk.CTkButton(lf_bset, text="", command=lambda: self.bf_start_batch_thread('re-encode'))
+        self.bf_btn_conv.pack(side=tk.RIGHT, padx=5)
+        self.bf_btn_fast = ctk.CTkButton(lf_bset, text="", command=lambda: self.bf_start_batch_thread('remux'))
+        self.bf_btn_fast.pack(side=tk.RIGHT, padx=5)
+
+        self.bf_queue_frame = ScrollableTaskFrame(self.ts_bf, height=400)
+        self.bf_queue_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
     def create_splitter_ui(self, parent):
         f_in = ctk.CTkFrame(parent); f_in.pack(fill=tk.X, padx=20, pady=20)
@@ -173,7 +189,6 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
         self.sp_progress_bar = ctk.CTkProgressBar(parent); self.sp_progress_bar.set(0); self.sp_progress_bar.pack(fill=tk.X, padx=20, pady=20)
 
     def create_settings_ui(self, parent):
-        # 1. Path Configuration
         lf_ff = ctk.CTkFrame(parent); lf_ff.pack(fill=tk.X, padx=20, pady=20)
         self.set_lbl_eng = ctk.CTkLabel(lf_ff, text="", font=("Segoe UI", 14, "bold")); self.set_lbl_eng.pack(anchor="w", padx=15, pady=5)
         r1 = ctk.CTkFrame(lf_ff, fg_color="transparent"); r1.pack(fill=tk.X, padx=10, pady=2)
@@ -185,7 +200,6 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.CTkEntry(r2, textvariable=self.ffprobe_path_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         self.set_btn_fp = ctk.CTkButton(r2, text="", width=80, command=lambda: self.browse_ffmpeg_path("ffprobe")); self.set_btn_fp.pack(side=tk.RIGHT)
 
-        # 2. Performance and real-time QP
         lf_hw = ctk.CTkFrame(parent); lf_hw.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         self.set_lbl_perf = ctk.CTkLabel(lf_hw, text="", font=("Segoe UI", 14, "bold")); self.set_lbl_perf.pack(anchor="w", padx=15, pady=5)
         f_top = ctk.CTkFrame(lf_hw, fg_color="transparent"); f_top.pack(fill=tk.X, padx=15)
@@ -199,7 +213,6 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
         self.set_lbl_thr = ctk.CTkLabel(f4, text=""); self.set_lbl_thr.pack(side=tk.LEFT, padx=20)
         ctk.CTkEntry(f4, textvariable=self.cpu_threads_to_use, width=60).pack(side=tk.LEFT)
 
-        # 3. Compact HW Specific Tabs
         self.hw_tabs = ctk.CTkTabview(lf_hw, height=110)
         self.hw_tabs.pack(fill=tk.X, padx=15, pady=5)
         t_nv = self.hw_tabs.add("NVIDIA"); t_intel = self.hw_tabs.add("Intel"); t_amd = self.hw_tabs.add("AMD")
@@ -251,21 +264,18 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
         self.set_lbl_nv.configure(text=config.get_string('settings_label_nv_preset'))
         self.set_lbl_intel.configure(text=config.get_string('settings_label_intel_preset'))
         self.set_lbl_amd.configure(text=config.get_string('settings_label_amd_usage'))
-        
+
         self.sf_ent_path.configure(placeholder_text=config.get_string('placeholder_dnd_single'))
         self.bf_ent_path.configure(placeholder_text=config.get_string('placeholder_dnd_batch'))
         self.sp_ent_path.configure(placeholder_text=config.get_string('placeholder_dnd_splitter'))
         self.update_summary_status()
 
     def update_summary_status(self, current_progress_percent=None):
-        """Update localized status and global ETA based on 0-100 progress scale"""
         total = len(self.tasks_queue_data)
         done = sum(1 for t in self.tasks_queue_data if t['status'] == "Done")
         self.stat_queued.set(config.get_string('stat_queued', count=total))
         self.stat_done.set(config.get_string('stat_finished', done=done, total=total))
-        
         if self.is_running and current_progress_percent is not None:
-            # Synchronize with TimeEstimator.update() scale (0-100)
             self.stat_eta.set(config.get_string('stat_eta', eta=self.eta_calculator.update(current_progress_percent)))
         else:
             self.stat_eta.set(config.get_string('stat_eta', eta="--:--"))
@@ -310,200 +320,40 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def sf_start_queue_processing(self):
         if self.is_running or not self.tasks_queue_data: return
-        self.is_running = True; self.set_ui_state(True, "single")
+        self.is_running = True
+        self.set_ui_state(True, "single")
         self.eta_calculator.reset()
         threading.Thread(target=self.execute_queue_processing, daemon=True).start()
 
-    def execute_queue_processing(self):
-        """Worker loop for Single tasks with enhanced logging and per-step progress"""
-        try:
-            total_tasks = len(self.tasks_queue_data)
-            for i, task in enumerate(self.tasks_queue_data):
-                if not self.is_running: break
-                if task['status'] == "Done": continue
-                self.current_task_index = i; filepath = task['filepath']; target_fmt = task['target_fmt']; ext = config.TARGET_FORMATS.get(target_fmt)
-                outp = os.path.join(os.path.dirname(filepath), "{}_conv.{}".format(os.path.splitext(os.path.basename(filepath))[0], ext))
-                
-                self.progress_queue.put({"type": "queue_update", "index": i, "status": config.get_string('probing_hw')})
-                
-                hw_configs, cpu_args = engine.get_encoding_params(self.selected_video_codec.get(), self.cpu_threads_to_use.get(), self.gpu_quality_target_crf.get(), self.nv_preset.get(), self.intel_preset.get(), self.amd_usage.get())
-                working_hw = None
-                for hw in hw_configs:
-                    if engine.is_hw_encoder_working(hw['args']): working_hw = hw['args']; break
-                
-                success = False
-                if working_hw:
-                    # Provide immediate feedback before entering chunked processing
-                    self.progress_queue.put({"type": "queue_update", "index": i, "status": "Starting GPU..."})
-                    success, _ = self.execute_chunked_task(filepath, outp, working_hw, i, total_tasks)
-                
-                if not success and self.is_running and task['status'] != "Cancelled":
-                    self.progress_queue.put({"type": "queue_update", "index": i, "status": config.get_string('using_cpu')})
-                    success, _ = self.run_ffmpeg_direct(filepath, outp, cpu_args, i, total_tasks)
-
-                task['status'] = "Done" if success else "Error"
-                self.progress_queue.put({"type": "queue_update", "index": i, "status": task['status'], "progress": 1.0 if success else 0})
-                
-                # Report final progress for current task to refresh global dashboard
-                global_fin = ((i + 1) / total_tasks) * 100
-                self.after(0, lambda: self.update_summary_status(global_fin))
-        finally:
-            self.progress_queue.put({"type": "queue_complete"})
-
-    def execute_chunked_task(self, input_path, output_path, preset_args, task_index, total_tasks):
-        """GPU Parallel Encoding with real-time pre-processing feedback"""
-        temp_dir = tempfile.mkdtemp(prefix="video_tool_chunk_"); self.temp_dirs.append(temp_dir)
-        audio_file = os.path.join(temp_dir, "audio.m4a"); merged_v = os.path.join(temp_dir, "merged.mp4")
-        try:
-            startupinfo = subprocess.STARTUPINFO(); startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            
-            # Pre-processing Logs
-            self.progress_queue.put({"type": "queue_update", "index": task_index, "status": "Extracting Audio..."})
-            subprocess.run([engine.SYSTEM_FFMPEG, '-y', '-i', input_path, '-vn', '-c:a', 'copy', audio_file], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=startupinfo)
-            
-            self.progress_queue.put({"type": "queue_update", "index": task_index, "status": "Splitting Video..."})
-            subprocess.run([engine.SYSTEM_FFMPEG, '-y', '-i', input_path, '-an', '-c:v', 'copy', '-f', 'segment', '-segment_time', '300', '-reset_timestamps', '1', os.path.join(temp_dir, "seg_%04d.mp4")], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=startupinfo)
-            
-            segments = sorted([f for f in os.listdir(temp_dir) if f.startswith("seg_") and f.endswith(".mp4")])
-            max_parallel = max(1, self.cpu_threads_to_use.get()); active_processes = []; segment_queue = list(segments); total_segs = len(segments)
-            
-            while segment_queue or active_processes:
-                if not self.is_running or self.tasks_queue_data[task_index]['status'] == "Cancelled":
-                    for proc, _ in active_processes:
-                        try: proc.terminate()
-                        except: pass
-                    return False, "Cancelled"
-                
-                while len(active_processes) < max_parallel and segment_queue:
-                    seg = segment_queue.pop(0)
-                    cmd = [engine.SYSTEM_FFMPEG, '-y', '-i', os.path.join(temp_dir, seg)] + preset_args + ['-threads', '1', os.path.join(temp_dir, "enc_"+seg)]
-                    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=startupinfo)
-                    active_processes.append((proc, seg))
-                
-                for p_item in active_processes[:]:
-                    proc, _ = p_item
-                    if proc.poll() is not None:
-                        active_processes.remove(p_item)
-                        completed = total_segs - len(segment_queue) - len(active_processes)
-                        prog = completed / total_segs
-                        # Calculate and send global progress (0-100 scale for TimeEstimator)
-                        global_prog_percent = ((task_index + prog) / total_tasks) * 100
-                        self.progress_queue.put({
-                            "type": "queue_update", 
-                            "index": task_index, 
-                            "progress": prog, 
-                            "status": "Encoding {}%".format(int(prog*100)),
-                            "global_progress_percent": global_prog_percent
-                        })
-                time.sleep(0.2)
-            
-            self.progress_queue.put({"type": "queue_update", "index": task_index, "status": "Merging..."})
-            concat_file = os.path.join(temp_dir, "concat.txt")
-            with open(concat_file, "w", encoding="utf-8") as f:
-                for seg in sorted([f for f in os.listdir(temp_dir) if f.startswith("enc_")]):
-                    # Python 3.8 Fix: Handle backslashes outside of f-string expression
-                    s_path = os.path.join(temp_dir, seg).replace("\\", "/")
-                    f.write("file '{}'\n".format(s_path))
-            
-            subprocess.run([engine.SYSTEM_FFMPEG, '-y', '-f', 'concat', '-safe', '0', '-i', concat_file, '-c', 'copy', merged_v], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=startupinfo)
-            if os.path.exists(audio_file) and os.path.getsize(audio_file) > 1024:
-                subprocess.run([engine.SYSTEM_FFMPEG, '-y', '-i', merged_v, '-i', audio_file, '-c:v', 'copy', '-c:a', 'copy', output_path], check=True, startupinfo=startupinfo)
-            else: shutil.copy2(merged_v, output_path)
-            return True, "Success"
-        except: return False, "Error"
-        finally:
-            self._cleanup_temp_dir(temp_dir)
-            if temp_dir in self.temp_dirs: self.temp_dirs.remove(temp_dir)
-
-    def run_ffmpeg_direct(self, input_path, output_path, preset_args, task_index, total_tasks):
-        """CPU/Direct encoding with time parsing and global dashboard feed"""
-        duration = engine.get_video_duration(input_path)
-        cmd = [engine.SYSTEM_FFMPEG, '-y', '-i', input_path] + preset_args + [output_path]
-        startupinfo = subprocess.STARTUPINFO(); startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        try:
-            self.current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, startupinfo=startupinfo, encoding='utf-8', errors='ignore')
-            for line in self.current_process.stdout:
-                if not self.is_running: break
-                m = re.search(r'time=(\d+):(\d+):(\d+\.\d+)', line)
-                if m and duration > 0:
-                    h, min_v, s = map(float, m.groups())
-                    prog = min((h*3600 + min_v*60 + s) / duration, 0.99)
-                    global_prog_percent = ((task_index + prog) / total_tasks) * 100
-                    self.progress_queue.put({
-                        "type": "queue_update", 
-                        "index": task_index, 
-                        "progress": prog, 
-                        "status": "{}%".format(int(prog*100)),
-                        "global_progress_percent": global_prog_percent
-                    })
-            self.current_process.wait(); return (self.current_process.returncode == 0), ""
-        except: return False, ""
-        finally: self.current_process = None
-
-    def on_app_closing(self):
-        self.save_app_settings(); self.is_running = False; self.is_splitter_running = False
-        if self.current_process:
-            try: self.current_process.terminate()
-            except: pass
-        if self.splitter_process:
-            try: self.splitter_process.terminate()
-            except: pass
-        for path in self.temp_dirs[:]: self._cleanup_temp_dir(path)
-        self.destroy()
-
-    def _cleanup_temp_dir(self, path):
-        if os.path.exists(path):
-            for _ in range(3):
-                try: shutil.rmtree(path, ignore_errors=True); break
-                except: time.sleep(0.5)
-
-    def process_queue(self):
-        try:
-            while True:
-                msg = self.progress_queue.get_nowait(); mtype = msg.get("type")
-                if mtype == "queue_update":
-                    w = self.task_widgets[msg['index']]
-                    if 'status' in msg: w['status_lbl'].configure(text=msg['status'])
-                    if 'progress' in msg: w['progress_bar'].set(msg['progress'])
-                    if 'global_progress_percent' in msg:
-                        self.update_summary_status(msg['global_progress_percent'])
-                elif mtype == "queue_complete" or mtype == "batch_complete":
-                    self.is_running = False; self.set_ui_state(False, "single"); self.update_summary_status()
-                    messagebox.showinfo("Done", config.get_string('status_complete'))
-                elif mtype == "splitter_complete":
-                    self.is_splitter_running = False; self.set_ui_state(False, "splitter")
-                    messagebox.showinfo("Done", config.get_string('status_complete'))
-                elif mtype == "progress_splitter": self.sp_progress_bar.set(msg['current'] / msg['total'])
-        except queue.Empty: pass
-        finally: self.after(100, self.process_queue)
-
-    def set_ui_state(self, proc, mode):
-        """Granular UI Locking for Single/Batch/Splitter modes"""
-        s = "disabled" if proc else "normal"
-        if mode == "single" or mode == "batch":
-            self.sf_btn_start.configure(state=s); self.sf_btn_stop.configure(state="normal" if proc else "disabled")
-            self.sf_btn_add.configure(state=s); self.sf_btn_rem.configure(state=s); self.sf_btn_clr.configure(state=s)
-            self.bf_btn_conv.configure(state=s); self.bf_btn_fast.configure(state=s)
-        elif mode == "splitter":
-            self.sp_btn_start.configure(state=s); self.sp_btn_stop.configure(state="normal" if proc else "disabled")
-
-    def browse_ffmpeg_path(self, target):
-        fp = filedialog.askopenfilename(filetypes=[("Executables", "*.exe"), ("All Files", "*.*")])
-        if fp:
-            if target == "ffmpeg": self.ffmpeg_path_var.set(fp)
-            else: self.ffprobe_path_var.set(fp)
-            engine.configure_ffmpeg_path(self.ffmpeg_path_var.get(), self.ffprobe_path_var.get()); self.save_app_settings()
-
-    def sf_select_file(self):
-        fp = filedialog.askopenfilename(filetypes=[("Video", " ".join(f"*{e}" for e in config.VIDEO_EXTENSIONS))])
-        if fp: self.handle_dnd_single_file([fp])
+    def bf_populate_queue(self, folder_path):
+        if self.is_running: return
+        self.bf_queue_frame.clear()
+        self.batch_queue_data.clear()
+        self.batch_widgets.clear()
+        if not os.path.isdir(folder_path): return
+        files = [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f)) and os.path.splitext(f)[1].lower() in config.VIDEO_EXTENSIONS]
+        fmt = self.sf_target_format.get()
+        for f in files:
+            filepath = os.path.join(folder_path, f)
+            row = ctk.CTkFrame(self.bf_queue_frame, fg_color="#333333")
+            row.pack(fill=tk.X, pady=2, padx=5)
+            ctk.CTkLabel(row, text="{} -> {}".format(f, fmt), anchor="w").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+            pb = ctk.CTkProgressBar(row, width=150); pb.set(0); pb.pack(side=tk.RIGHT, padx=10)
+            stat_lbl = ctk.CTkLabel(row, text="Ready", width=120, anchor="e"); stat_lbl.pack(side=tk.RIGHT, padx=5)
+            self.batch_queue_data.append({"filepath": filepath, "target_fmt": fmt, "status": "Ready", "filename": f})
+            self.batch_widgets.append({"frame": row, "status_lbl": stat_lbl, "progress_bar": pb})
+        self.update_summary_status()
 
     def bf_select_input_folder(self):
         fp = filedialog.askdirectory()
-        if fp: self.bf_input_folder_path.set(fp)
-    
+        if fp:
+            self.bf_input_folder_path.set(fp)
+            self.bf_populate_queue(fp)
+
     def handle_dnd_batch_folder(self, paths):
-        self.bf_input_folder_path.set(paths[0] if os.path.isdir(paths[0]) else os.path.dirname(paths[0]))
+        fp = paths[0] if os.path.isdir(paths[0]) else os.path.dirname(paths[0])
+        self.bf_input_folder_path.set(fp)
+        self.bf_populate_queue(fp)
 
     def handle_dnd_splitter_file(self, paths):
         self.sp_input_filepath.set(paths[0]); self.sp_btn_start.configure(state="normal")
@@ -539,32 +389,274 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
         finally: self.is_splitter_running = False
 
     def bf_start_batch_thread(self, mode):
-        if self.is_running: return
-        self.is_running = True; self.set_ui_state(True, "batch"); self.eta_calculator.reset()
-        self.bf_log_text.configure(state='normal'); self.bf_log_text.delete(1.0, tk.END); self.bf_log_text.configure(state='disabled')
-        threading.Thread(target=self.execute_batch_conversion, args=(mode, self.bf_input_folder_path.get(), self.sf_target_format.get()), daemon=True).start()
+        if self.is_running or not self.batch_queue_data: return
+        self.is_running = True
+        self.set_ui_state(True, "batch")
+        self.eta_calculator.reset()
+        threading.Thread(target=self.execute_batch_conversion, args=(mode,), daemon=True).start()
 
-    def execute_batch_conversion(self, mode, inp_folder, fmt):
-        """Full logic for iterating folders and hardware-probing per file"""
+    def execute_batch_conversion(self, mode):
         try:
-            ext = config.TARGET_FORMATS.get(fmt)
-            files = [f for f in os.listdir(inp_folder) if os.path.isfile(os.path.join(inp_folder, f)) and os.path.splitext(f)[1].lower() in config.VIDEO_EXTENSIONS]
-            if not files: return
-            total = len(files)
-            for i, f_name in enumerate(files):
+            total_tasks = len(self.batch_queue_data)
+            for i, task in enumerate(self.batch_queue_data):
                 if not self.is_running: break
-                inp_p = os.path.join(inp_folder, f_name)
-                out_p = os.path.join(inp_folder, "{}_batch.{}".format(os.path.splitext(f_name)[0], ext))
+                if task['status'] == "Done": continue
+                
+                filepath = task['filepath']
+                target_fmt = task['target_fmt']
+                ext = config.TARGET_FORMATS.get(target_fmt)
+                outp = os.path.join(os.path.dirname(filepath), "{}_batch.{}".format(os.path.splitext(os.path.basename(filepath))[0], ext))
+                
+                self.progress_queue.put({"type": "queue_update", "task_type": "batch", "index": i, "status": config.get_string('probing_hw')})
+
+                hw_configs, cpu_args = engine.get_encoding_params(self.selected_video_codec.get(), self.cpu_threads_to_use.get(), self.gpu_quality_target_crf.get(), self.nv_preset.get(), self.intel_preset.get(), self.amd_usage.get())
+                working_hw = None
+                for hw in hw_configs:
+                    if engine.is_hw_encoder_working(hw['args']): working_hw = hw['args']; break
+
+                success = False
+                if working_hw and mode != 'remux':
+                    self.progress_queue.put({"type": "queue_update", "task_type": "batch", "index": i, "status": "Starting GPU..."})
+                    success, _ = self.execute_chunked_task(filepath, outp, working_hw, i, total_tasks, task_type="batch")
+
+                if not success and self.is_running:
+                    args = ['-c', 'copy'] if mode == 'remux' else cpu_args
+                    self.progress_queue.put({"type": "queue_update", "task_type": "batch", "index": i, "status": config.get_string('using_cpu')})
+                    success, _ = self.run_ffmpeg_direct(filepath, outp, args, i, total_tasks, task_type="batch")
+
+                task['status'] = "Done" if success else "Error"
+                self.progress_queue.put({"type": "queue_update", "task_type": "batch", "index": i, "status": task['status'], "progress": 1.0 if success else 0})
+
+                if success and self.bf_auto_archive.get():
+                    archive_dir = os.path.join(os.path.dirname(filepath), "archive")
+                    if not os.path.exists(archive_dir): os.makedirs(archive_dir)
+                    try: shutil.move(filepath, os.path.join(archive_dir, task['filename']))
+                    except: pass
+
+                global_fin = ((i + 1) / total_tasks) * 100
+                self.after(0, lambda: self.update_summary_status(global_fin))
+        finally:
+            self.progress_queue.put({"type": "batch_complete"})
+
+    def execute_queue_processing(self):
+        try:
+            total_tasks = len(self.tasks_queue_data)
+            for i, task in enumerate(self.tasks_queue_data):
+                if not self.is_running: break
+                if task['status'] == "Done": continue
+                self.current_task_index = i; filepath = task['filepath']; target_fmt = task['target_fmt']; ext = config.TARGET_FORMATS.get(target_fmt)
+                outp = os.path.join(os.path.dirname(filepath), "{}_conv.{}".format(os.path.splitext(os.path.basename(filepath))[0], ext))
+                
+                self.progress_queue.put({"type": "queue_update", "task_type": "single", "index": i, "status": config.get_string('probing_hw')})
                 
                 hw_configs, cpu_args = engine.get_encoding_params(self.selected_video_codec.get(), self.cpu_threads_to_use.get(), self.gpu_quality_target_crf.get(), self.nv_preset.get(), self.intel_preset.get(), self.amd_usage.get())
                 working_hw = None
                 for hw in hw_configs:
                     if engine.is_hw_encoder_working(hw['args']): working_hw = hw['args']; break
                 
-                args = working_hw if (working_hw and mode != 'remux') else (['-c', 'copy'] if mode == 'remux' else cpu_args)
-                self.run_ffmpeg_direct(inp_p, out_p, args, i, total)
+                success = False
+                if working_hw:
+                    self.progress_queue.put({"type": "queue_update", "task_type": "single", "index": i, "status": "Starting GPU..."})
+                    success, _ = self.execute_chunked_task(filepath, outp, working_hw, i, total_tasks, task_type="single")
+                
+                if not success and self.is_running and task['status'] != "Cancelled":
+                    self.progress_queue.put({"type": "queue_update", "task_type": "single", "index": i, "status": config.get_string('using_cpu')})
+                    success, _ = self.run_ffmpeg_direct(filepath, outp, cpu_args, i, total_tasks, task_type="single")
+
+                task['status'] = "Done" if success else "Error"
+                self.progress_queue.put({"type": "queue_update", "task_type": "single", "index": i, "status": task['status'], "progress": 1.0 if success else 0})
+                
+                global_fin = ((i + 1) / total_tasks) * 100
+                self.after(0, lambda: self.update_summary_status(global_fin))
         finally:
-            self.progress_queue.put({"type": "batch_complete"})
+            self.progress_queue.put({"type": "queue_complete"})
+
+    def _run_stoppable_subprocess(self, cmd, startupinfo):
+        try:
+            self.current_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=startupinfo)
+            while self.current_process and self.current_process.poll() is None:
+                if not self.is_running:
+                    self.current_process.terminate()
+                    self.current_process.wait(timeout=2)
+                    return False
+                time.sleep(0.1)
+            return self.current_process.returncode == 0
+        except:
+            return False
+        finally:
+            self.current_process = None
+
+    def execute_chunked_task(self, input_path, output_path, preset_args, task_index, total_tasks, task_type="single"):
+        temp_dir = tempfile.mkdtemp(prefix="video_tool_chunk_"); self.temp_dirs.append(temp_dir)
+        audio_file = os.path.join(temp_dir, "audio.m4a"); merged_v = os.path.join(temp_dir, "merged.mp4")
+        queue_data = self.tasks_queue_data if task_type == "single" else self.batch_queue_data
+        
+        try:
+            startupinfo = subprocess.STARTUPINFO(); startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            self.progress_queue.put({"type": "queue_update", "task_type": task_type, "index": task_index, "status": "Extracting Audio..."})
+            if not self._run_stoppable_subprocess([engine.SYSTEM_FFMPEG, '-y', '-i', input_path, '-vn', '-c:a', 'copy', audio_file], startupinfo):
+                return False, "Cancelled"
+            
+            self.progress_queue.put({"type": "queue_update", "task_type": task_type, "index": task_index, "status": "Splitting Video..."})
+            if not self._run_stoppable_subprocess([engine.SYSTEM_FFMPEG, '-y', '-i', input_path, '-an', '-c:v', 'copy', '-f', 'segment', '-segment_time', '300', '-reset_timestamps', '1', os.path.join(temp_dir, "seg_%04d.mp4")], startupinfo):
+                return False, "Cancelled"
+            
+            segments = sorted([f for f in os.listdir(temp_dir) if f.startswith("seg_") and f.endswith(".mp4")])
+            max_parallel = max(1, self.cpu_threads_to_use.get()); active_processes = []; segment_queue = list(segments); total_segs = len(segments)
+            
+            while segment_queue or active_processes:
+                if not self.is_running or queue_data[task_index]['status'] == "Cancelled":
+                    for proc, _ in active_processes:
+                        try: 
+                            proc.terminate()
+                            proc.wait(timeout=2)
+                        except: pass
+                    return False, "Cancelled"
+                
+                while len(active_processes) < max_parallel and segment_queue:
+                    seg = segment_queue.pop(0)
+                    cmd = [engine.SYSTEM_FFMPEG, '-y', '-i', os.path.join(temp_dir, seg)] + preset_args + ['-threads', '1', os.path.join(temp_dir, "enc_"+seg)]
+                    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=startupinfo)
+                    active_processes.append((proc, seg))
+                
+                for p_item in active_processes[:]:
+                    proc, _ = p_item
+                    if proc.poll() is not None:
+                        active_processes.remove(p_item)
+                        completed = total_segs - len(segment_queue) - len(active_processes)
+                        prog = completed / total_segs
+                        global_prog_percent = ((task_index + prog) / total_tasks) * 100
+                        self.progress_queue.put({
+                            "type": "queue_update", 
+                            "task_type": task_type,
+                            "index": task_index, 
+                            "progress": prog, 
+                            "status": "Encoding {}%".format(int(prog*100)),
+                            "global_progress_percent": global_prog_percent
+                        })
+                time.sleep(0.2)
+            
+            self.progress_queue.put({"type": "queue_update", "task_type": task_type, "index": task_index, "status": "Merging..."})
+            concat_file = os.path.join(temp_dir, "concat.txt")
+            with open(concat_file, "w", encoding="utf-8") as f:
+                for seg in sorted([f for f in os.listdir(temp_dir) if f.startswith("enc_")]):
+                    s_path = os.path.join(temp_dir, seg).replace("\\", "/")
+                    f.write("file '{}'\n".format(s_path))
+            
+            if not self._run_stoppable_subprocess([engine.SYSTEM_FFMPEG, '-y', '-f', 'concat', '-safe', '0', '-i', concat_file, '-c', 'copy', merged_v], startupinfo):
+                return False, "Cancelled"
+            
+            if os.path.exists(audio_file) and os.path.getsize(audio_file) > 1024:
+                if not self._run_stoppable_subprocess([engine.SYSTEM_FFMPEG, '-y', '-i', merged_v, '-i', audio_file, '-c:v', 'copy', '-c:a', 'copy', output_path], startupinfo):
+                    return False, "Cancelled"
+            else: shutil.copy2(merged_v, output_path)
+            return True, "Success"
+        except: return False, "Error"
+        finally:
+            self._cleanup_temp_dir(temp_dir)
+            if temp_dir in self.temp_dirs: self.temp_dirs.remove(temp_dir)
+
+    def run_ffmpeg_direct(self, input_path, output_path, preset_args, task_index, total_tasks, task_type="single"):
+        duration = engine.get_video_duration(input_path)
+        cmd = [engine.SYSTEM_FFMPEG, '-y', '-i', input_path] + preset_args + [output_path]
+        startupinfo = subprocess.STARTUPINFO(); startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        try:
+            self.current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, startupinfo=startupinfo, encoding='utf-8', errors='ignore')
+            for line in self.current_process.stdout:
+                if not self.is_running: 
+                    self.current_process.terminate()
+                    self.current_process.wait(timeout=2)
+                    break
+                m = re.search(r'time=(\d+):(\d+):(\d+\.\d+)', line)
+                if m and duration > 0:
+                    h, min_v, s = map(float, m.groups())
+                    prog = min((h*3600 + min_v*60 + s) / duration, 0.99)
+                    global_prog_percent = ((task_index + prog) / total_tasks) * 100
+                    self.progress_queue.put({
+                        "type": "queue_update", 
+                        "task_type": task_type,
+                        "index": task_index, 
+                        "progress": prog, 
+                        "status": "{}%".format(int(prog*100)),
+                        "global_progress_percent": global_prog_percent
+                    })
+            self.current_process.wait(); return (self.current_process.returncode == 0), ""
+        except: return False, ""
+        finally: self.current_process = None
+
+    def process_queue(self):
+        try:
+            while True:
+                msg = self.progress_queue.get_nowait(); mtype = msg.get("type")
+                if mtype == "queue_update":
+                    t_type = msg.get("task_type", "single")
+                    widgets_list = self.task_widgets if t_type == "single" else self.batch_widgets
+                    
+                    if msg['index'] < len(widgets_list):
+                        w = widgets_list[msg['index']]
+                        if 'status' in msg: w['status_lbl'].configure(text=msg['status'])
+                        if 'progress' in msg: w['progress_bar'].set(msg['progress'])
+                        
+                    if 'global_progress_percent' in msg:
+                        self.update_summary_status(msg['global_progress_percent'])
+                        
+                elif mtype == "queue_complete" or mtype == "batch_complete":
+                    self.is_running = False
+                    self.set_ui_state(False, "single" if mtype == "queue_complete" else "batch")
+                    self.update_summary_status()
+                    messagebox.showinfo("Done", config.get_string('status_complete'))
+                elif mtype == "splitter_complete":
+                    self.is_splitter_running = False; self.set_ui_state(False, "splitter")
+                    messagebox.showinfo("Done", config.get_string('status_complete'))
+                elif mtype == "progress_splitter": self.sp_progress_bar.set(msg['current'] / msg['total'])
+        except queue.Empty: pass
+        finally: self.after(100, self.process_queue)
+
+    def on_app_closing(self):
+        self.save_app_settings(); self.is_running = False; self.is_splitter_running = False
+        if self.current_process:
+            try: 
+                self.current_process.terminate()
+                self.current_process.wait(timeout=2)
+            except: pass
+        if self.splitter_process:
+            try: self.splitter_process.terminate()
+            except: pass
+        for path in self.temp_dirs[:]: self._cleanup_temp_dir(path)
+        self.destroy()
+
+    def _cleanup_temp_dir(self, path):
+        if os.path.exists(path):
+            for _ in range(3):
+                try: shutil.rmtree(path, ignore_errors=True); break
+                except: time.sleep(0.5)
+
+    def set_ui_state(self, proc, mode):
+        s = "disabled" if proc else "normal"
+        if mode == "single":
+            self.sf_btn_start.configure(state=s)
+            self.sf_btn_stop.configure(state="normal" if proc else "disabled")
+            self.sf_btn_add.configure(state=s)
+            self.sf_btn_rem.configure(state=s)
+            self.sf_btn_clr.configure(state=s)
+        elif mode == "batch":
+            self.bf_btn_conv.configure(state=s)
+            self.bf_btn_fast.configure(state=s)
+            self.bf_btn_stop.configure(state="normal" if proc else "disabled")
+        elif mode == "splitter":
+            self.sp_btn_start.configure(state=s)
+            self.sp_btn_stop.configure(state="normal" if proc else "disabled")
+
+    def browse_ffmpeg_path(self, target):
+        fp = filedialog.askopenfilename(filetypes=[("Executables", "*.exe"), ("All Files", "*.*")])
+        if fp:
+            if target == "ffmpeg": self.ffmpeg_path_var.set(fp)
+            else: self.ffprobe_path_var.set(fp)
+            engine.configure_ffmpeg_path(self.ffmpeg_path_var.get(), self.ffprobe_path_var.get()); self.save_app_settings()
+
+    def sf_select_file(self):
+        fp = filedialog.askopenfilename(filetypes=[("Video", " ".join(f"*{e}" for e in config.VIDEO_EXTENSIONS))])
+        if fp: self.handle_dnd_single_file([fp])
 
     def stop_splitter(self):
         self.is_splitter_running = False
@@ -575,7 +667,9 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
     def stop_processing(self):
         self.is_running = False
         if self.current_process:
-            try: self.current_process.terminate()
+            try: 
+                self.current_process.terminate()
+                self.current_process.wait(timeout=2)
             except: pass
 
 if __name__ == "__main__":
