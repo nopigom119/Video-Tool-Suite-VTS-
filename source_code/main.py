@@ -542,7 +542,7 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
         if self.is_running: return
         self.is_running = True; self.set_ui_state(True, "batch"); self.eta_calculator.reset()
         self.bf_log_text.configure(state='normal'); self.bf_log_text.delete(1.0, tk.END); self.bf_log_text.configure(state='disabled')
-        threading.Thread(target=self.execute_batch_conversion, args=(mode, self.bf_input_folder_path.get(), self.bf_target_format.get()), daemon=True).start()
+        threading.Thread(target=self.execute_batch_conversion, args=(mode, self.bf_input_folder_path.get(), self.sf_target_format.get()), daemon=True).start()
 
     def execute_batch_conversion(self, mode, inp_folder, fmt):
         """Full logic for iterating folders and hardware-probing per file"""
