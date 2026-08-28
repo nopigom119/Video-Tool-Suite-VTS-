@@ -45,7 +45,7 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
         engine.configure_ffmpeg_path(self.app_cfg.get("ffmpeg_path"), self.app_cfg.get("ffprobe_path"))
 
         self.total_cpu_cores = os.cpu_count() or 1
-        self.cpu_threads_to_use = tk.IntVar(value=self.app_cfg.get("threads", 4))
+        self.cpu_threads_to_use = tk.StringVar(value=str(self.app_cfg.get("threads", 4)))
         self.ffmpeg_path_var = tk.StringVar(value=engine.SYSTEM_FFMPEG or "")
         self.ffprobe_path_var = tk.StringVar(value=engine.SYSTEM_FFPROBE or "")
         self.selected_video_codec = tk.StringVar(value=self.app_cfg.get("codec", "H.264"))
@@ -76,11 +76,18 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
         self.protocol("WM_DELETE_WINDOW", self.on_app_closing)
         self.after(100, self.process_queue)
 
+    def _get_safe_threads(self):
+        try:
+            val = int(self.cpu_threads_to_use.get().strip())
+            return max(1, val)
+        except (ValueError, AttributeError):
+            return 4
+
     def save_app_settings(self):
         settings = {
             "ffmpeg_path": self.ffmpeg_path_var.get(),
             "ffprobe_path": self.ffprobe_path_var.get(),
-            "threads": self.cpu_threads_to_use.get(),
+            "threads": self._get_safe_threads(),
             "codec": self.selected_video_codec.get(),
             "qp": self.gpu_quality_target_crf.get(),
             "nv_preset": self.nv_preset.get(),
@@ -381,12 +388,17 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
                 if not self.is_splitter_running: break
                 out_f = os.path.join(output_dir, "{}_part_{:03d}{}".format(os.path.splitext(os.path.basename(video_path))[0], i+1, os.path.splitext(video_path)[1]))
                 cmd = [engine.SYSTEM_FFMPEG, '-y', '-ss', str(i*seg_dur), '-i', video_path, '-t', str(seg_dur), '-c', 'copy', out_f]
-                self.splitter_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=startupinfo)
-                self.splitter_process.wait()
+                print(f"[Splitter] Running: {' '.join(cmd)}")
+                self.splitter_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo, text=True, errors='ignore')
+                stdout, stderr = self.splitter_process.communicate()
+                if self.splitter_process.returncode != 0:
+                    print(f"[Splitter Error] {stderr}")
                 self.progress_queue.put({"type": "progress_splitter", "current": i+1, "total": num_seg})
             self.progress_queue.put({"type": "splitter_complete"})
-        except: pass
-        finally: self.is_splitter_running = False
+        except Exception as e:
+            print(f"[Splitter Exception] {e}")
+        finally: 
+            self.is_splitter_running = False
 
     def bf_start_batch_thread(self, mode):
         if self.is_running or not self.batch_queue_data: return
@@ -398,6 +410,7 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
     def execute_batch_conversion(self, mode):
         try:
             total_tasks = len(self.batch_queue_data)
+            threads_count = self._get_safe_threads()
             for i, task in enumerate(self.batch_queue_data):
                 if not self.is_running: break
                 if task['status'] == "Done": continue
@@ -407,31 +420,39 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
                 ext = config.TARGET_FORMATS.get(target_fmt)
                 outp = os.path.join(os.path.dirname(filepath), "{}_batch.{}".format(os.path.splitext(os.path.basename(filepath))[0], ext))
                 
+                print(f"\n[Batch] Processing ({i+1}/{total_tasks}): {filepath}")
                 self.progress_queue.put({"type": "queue_update", "task_type": "batch", "index": i, "status": config.get_string('probing_hw')})
 
-                hw_configs, cpu_args = engine.get_encoding_params(self.selected_video_codec.get(), self.cpu_threads_to_use.get(), self.gpu_quality_target_crf.get(), self.nv_preset.get(), self.intel_preset.get(), self.amd_usage.get())
+                hw_configs, cpu_args = engine.get_encoding_params(self.selected_video_codec.get(), threads_count, self.gpu_quality_target_crf.get(), self.nv_preset.get(), self.intel_preset.get(), self.amd_usage.get())
                 working_hw = None
                 for hw in hw_configs:
-                    if engine.is_hw_encoder_working(hw['args']): working_hw = hw['args']; break
+                    is_working = engine.is_hw_encoder_working(hw['args'])
+                    print(f"[HW Probe] {hw['name']}: {'Supported' if is_working else 'Not Supported'}")
+                    if is_working:
+                        working_hw = hw['args']
+                        break
 
                 success = False
                 if working_hw and mode != 'remux':
+                    print(f"[Batch] Trying Hardware Acceleration: {' '.join(working_hw)}")
                     self.progress_queue.put({"type": "queue_update", "task_type": "batch", "index": i, "status": "Starting GPU..."})
                     success, _ = self.execute_chunked_task(filepath, outp, working_hw, i, total_tasks, task_type="batch")
 
                 if not success and self.is_running:
                     args = ['-c', 'copy'] if mode == 'remux' else cpu_args
+                    print(f"[Batch] Falling back to CPU / Direct: {' '.join(args)}")
                     self.progress_queue.put({"type": "queue_update", "task_type": "batch", "index": i, "status": config.get_string('using_cpu')})
                     success, _ = self.run_ffmpeg_direct(filepath, outp, args, i, total_tasks, task_type="batch")
 
                 task['status'] = "Done" if success else "Error"
+                print(f"[Batch] Task finished with status: {task['status']}")
                 self.progress_queue.put({"type": "queue_update", "task_type": "batch", "index": i, "status": task['status'], "progress": 1.0 if success else 0})
 
                 if success and self.bf_auto_archive.get():
                     archive_dir = os.path.join(os.path.dirname(filepath), "archive")
                     if not os.path.exists(archive_dir): os.makedirs(archive_dir)
                     try: shutil.move(filepath, os.path.join(archive_dir, task['filename']))
-                    except: pass
+                    except Exception as e: print(f"[Archive Error] {e}")
 
                 global_fin = ((i + 1) / total_tasks) * 100
                 self.after(0, lambda: self.update_summary_status(global_fin))
@@ -441,29 +462,38 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
     def execute_queue_processing(self):
         try:
             total_tasks = len(self.tasks_queue_data)
+            threads_count = self._get_safe_threads()
             for i, task in enumerate(self.tasks_queue_data):
                 if not self.is_running: break
                 if task['status'] == "Done": continue
                 self.current_task_index = i; filepath = task['filepath']; target_fmt = task['target_fmt']; ext = config.TARGET_FORMATS.get(target_fmt)
                 outp = os.path.join(os.path.dirname(filepath), "{}_conv.{}".format(os.path.splitext(os.path.basename(filepath))[0], ext))
                 
+                print(f"\n[Single] Processing ({i+1}/{total_tasks}): {filepath}")
                 self.progress_queue.put({"type": "queue_update", "task_type": "single", "index": i, "status": config.get_string('probing_hw')})
                 
-                hw_configs, cpu_args = engine.get_encoding_params(self.selected_video_codec.get(), self.cpu_threads_to_use.get(), self.gpu_quality_target_crf.get(), self.nv_preset.get(), self.intel_preset.get(), self.amd_usage.get())
+                hw_configs, cpu_args = engine.get_encoding_params(self.selected_video_codec.get(), threads_count, self.gpu_quality_target_crf.get(), self.nv_preset.get(), self.intel_preset.get(), self.amd_usage.get())
                 working_hw = None
                 for hw in hw_configs:
-                    if engine.is_hw_encoder_working(hw['args']): working_hw = hw['args']; break
+                    is_working = engine.is_hw_encoder_working(hw['args'])
+                    print(f"[HW Probe] {hw['name']}: {'Supported' if is_working else 'Not Supported'}")
+                    if is_working:
+                        working_hw = hw['args']
+                        break
                 
                 success = False
                 if working_hw:
+                    print(f"[Single] Trying Hardware Acceleration: {' '.join(working_hw)}")
                     self.progress_queue.put({"type": "queue_update", "task_type": "single", "index": i, "status": "Starting GPU..."})
                     success, _ = self.execute_chunked_task(filepath, outp, working_hw, i, total_tasks, task_type="single")
                 
                 if not success and self.is_running and task['status'] != "Cancelled":
+                    print(f"[Single] Falling back to CPU / Direct: {' '.join(cpu_args)}")
                     self.progress_queue.put({"type": "queue_update", "task_type": "single", "index": i, "status": config.get_string('using_cpu')})
                     success, _ = self.run_ffmpeg_direct(filepath, outp, cpu_args, i, total_tasks, task_type="single")
 
                 task['status'] = "Done" if success else "Error"
+                print(f"[Single] Task finished with status: {task['status']}")
                 self.progress_queue.put({"type": "queue_update", "task_type": "single", "index": i, "status": task['status'], "progress": 1.0 if success else 0})
                 
                 global_fin = ((i + 1) / total_tasks) * 100
@@ -473,15 +503,25 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _run_stoppable_subprocess(self, cmd, startupinfo):
         try:
-            self.current_process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=startupinfo)
-            while self.current_process and self.current_process.poll() is None:
-                if not self.is_running:
-                    self.current_process.terminate()
-                    self.current_process.wait(timeout=2)
-                    return False
-                time.sleep(0.1)
-            return self.current_process.returncode == 0
-        except:
+            print(f"[Exec Subprocess] {' '.join(cmd)}")
+            self.current_process = subprocess.Popen(
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE, 
+                startupinfo=startupinfo,
+                text=True,
+                encoding='utf-8',
+                errors='ignore'
+            )
+            stdout, stderr = self.current_process.communicate()
+            if self.current_process.returncode != 0:
+                print(f"[Subprocess Error] Return Code: {self.current_process.returncode}")
+                if stderr:
+                    print(f"[FFmpeg stderr]\n{stderr.strip()}")
+                return False
+            return True
+        except Exception as e:
+            print(f"[Subprocess Exception] {e}")
             return False
         finally:
             self.current_process = None
@@ -495,18 +535,22 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
             startupinfo = subprocess.STARTUPINFO(); startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             self.progress_queue.put({"type": "queue_update", "task_type": task_type, "index": task_index, "status": "Extracting Audio..."})
             if not self._run_stoppable_subprocess([engine.SYSTEM_FFMPEG, '-y', '-i', input_path, '-vn', '-c:a', 'copy', audio_file], startupinfo):
+                print("[Execute Chunked] Audio extraction failed or cancelled.")
                 return False, "Cancelled"
             
             self.progress_queue.put({"type": "queue_update", "task_type": task_type, "index": task_index, "status": "Splitting Video..."})
             if not self._run_stoppable_subprocess([engine.SYSTEM_FFMPEG, '-y', '-i', input_path, '-an', '-c:v', 'copy', '-f', 'segment', '-segment_time', '300', '-reset_timestamps', '1', os.path.join(temp_dir, "seg_%04d.mp4")], startupinfo):
+                print("[Execute Chunked] Segment splitting failed or cancelled.")
                 return False, "Cancelled"
             
             segments = sorted([f for f in os.listdir(temp_dir) if f.startswith("seg_") and f.endswith(".mp4")])
-            max_parallel = max(1, self.cpu_threads_to_use.get()); active_processes = []; segment_queue = list(segments); total_segs = len(segments)
+            max_parallel = self._get_safe_threads()
+            active_processes = []; segment_queue = list(segments); total_segs = len(segments)
+            print(f"[Execute Chunked] Total segments to encode: {total_segs} (Parallel concurrency: {max_parallel})")
             
             while segment_queue or active_processes:
                 if not self.is_running or queue_data[task_index]['status'] == "Cancelled":
-                    for proc, _ in active_processes:
+                    for proc, _, _ in active_processes:
                         try: 
                             proc.terminate()
                             proc.wait(timeout=2)
@@ -516,13 +560,19 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
                 while len(active_processes) < max_parallel and segment_queue:
                     seg = segment_queue.pop(0)
                     cmd = [engine.SYSTEM_FFMPEG, '-y', '-i', os.path.join(temp_dir, seg)] + preset_args + ['-threads', '1', os.path.join(temp_dir, "enc_"+seg)]
-                    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=startupinfo)
-                    active_processes.append((proc, seg))
+                    print(f"[Encoding Segment] {seg} -> enc_{seg}")
+                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo, text=True, errors='ignore')
+                    active_processes.append((proc, seg, cmd))
                 
                 for p_item in active_processes[:]:
-                    proc, _ = p_item
+                    proc, seg, cmd_run = p_item
                     if proc.poll() is not None:
                         active_processes.remove(p_item)
+                        if proc.returncode != 0:
+                            _, err = proc.communicate()
+                            print(f"[Segment Error] Failed on {seg} with return code {proc.returncode}")
+                            print(f"[FFmpeg stderr]\n{err.strip()}")
+                            return False, "Error"
                         completed = total_segs - len(segment_queue) - len(active_processes)
                         prog = completed / total_segs
                         global_prog_percent = ((task_index + prog) / total_tasks) * 100
@@ -544,14 +594,19 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
                     f.write("file '{}'\n".format(s_path))
             
             if not self._run_stoppable_subprocess([engine.SYSTEM_FFMPEG, '-y', '-f', 'concat', '-safe', '0', '-i', concat_file, '-c', 'copy', merged_v], startupinfo):
+                print("[Execute Chunked] Segment merging failed.")
                 return False, "Cancelled"
             
             if os.path.exists(audio_file) and os.path.getsize(audio_file) > 1024:
                 if not self._run_stoppable_subprocess([engine.SYSTEM_FFMPEG, '-y', '-i', merged_v, '-i', audio_file, '-c:v', 'copy', '-c:a', 'copy', output_path], startupinfo):
+                    print("[Execute Chunked] Final muxing with audio failed.")
                     return False, "Cancelled"
-            else: shutil.copy2(merged_v, output_path)
+            else: 
+                shutil.copy2(merged_v, output_path)
             return True, "Success"
-        except: return False, "Error"
+        except Exception as e: 
+            print(f"[Execute Chunked Exception] {e}")
+            return False, "Error"
         finally:
             self._cleanup_temp_dir(temp_dir)
             if temp_dir in self.temp_dirs: self.temp_dirs.remove(temp_dir)
@@ -559,6 +614,7 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
     def run_ffmpeg_direct(self, input_path, output_path, preset_args, task_index, total_tasks, task_type="single"):
         duration = engine.get_video_duration(input_path)
         cmd = [engine.SYSTEM_FFMPEG, '-y', '-i', input_path] + preset_args + [output_path]
+        print(f"[Direct Run] {' '.join(cmd)}")
         startupinfo = subprocess.STARTUPINFO(); startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         try:
             self.current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, startupinfo=startupinfo, encoding='utf-8', errors='ignore')
@@ -580,9 +636,15 @@ class VideoToolSuite(ctk.CTk, TkinterDnD.DnDWrapper):
                         "status": "{}%".format(int(prog*100)),
                         "global_progress_percent": global_prog_percent
                     })
-            self.current_process.wait(); return (self.current_process.returncode == 0), ""
-        except: return False, ""
-        finally: self.current_process = None
+                elif "Error" in line or "error" in line:
+                    print(f"[FFmpeg Output] {line.strip()}")
+            self.current_process.wait()
+            return (self.current_process.returncode == 0), ""
+        except Exception as e:
+            print(f"[Direct Run Exception] {e}")
+            return False, ""
+        finally: 
+            self.current_process = None
 
     def process_queue(self):
         try:
